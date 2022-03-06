@@ -1,6 +1,8 @@
 // Author:   Tong Qin               qintonguav@gmail.com
 // 	         Shaozu Cao 		    saozu.cao@connect.ust.hk
 
+//; 本文件实现Kitti数据集的数据（图像、机关雷达点云）转成rosbag的包，便于下次直接播放
+
 #include <iostream>
 #include <fstream>
 #include <iterator>
