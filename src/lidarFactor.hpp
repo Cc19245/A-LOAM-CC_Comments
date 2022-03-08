@@ -19,6 +19,8 @@ struct LidarEdgeFactor
 	bool operator()(const T *q, const T *t, T *residual) const
 	{
 		// 将double数组转成eigen的数据结构，注意这里必须都写成模板
+		//; operate()必须是一个模板函数。实际上，由于传入的都是double数组，所以函数真正执行的时候这里的T都是double。
+		//; 但是！：由于模板数据类型只有在程序运行的时候才能确定， 所以这里必须全部写成T，即使我们事先知道T一定是double
 		Eigen::Matrix<T, 3, 1> cp{T(curr_point.x()), T(curr_point.y()), T(curr_point.z())};
 		Eigen::Matrix<T, 3, 1> lpa{T(last_point_a.x()), T(last_point_a.y()), T(last_point_a.z())};
 		Eigen::Matrix<T, 3, 1> lpb{T(last_point_b.x()), T(last_point_b.y()), T(last_point_b.z())};
@@ -28,6 +30,7 @@ struct LidarEdgeFactor
 		Eigen::Quaternion<T> q_identity{T(1), T(0), T(0), T(0)};
 		// 计算的是上一帧到当前帧的位姿变换，因此根据匀速模型，计算该点对应的位姿
 		// 这里暂时不考虑畸变，因此这里不做任何变换
+		//! 问题：这里到底是不是在进行运动畸变补偿？
 		q_last_curr = q_identity.slerp(T(s), q_last_curr);
 		Eigen::Matrix<T, 3, 1> t_last_curr{T(s) * t[0], T(s) * t[1], T(s) * t[2]};
 
@@ -39,6 +42,7 @@ struct LidarEdgeFactor
 		Eigen::Matrix<T, 3, 1> de = lpa - lpb;
 		// 残差的模是该点到底边的垂线长度
 		// 这里感觉不需要定义三维
+		//; 这里其实无所谓，这里相当于是把点到直线的垂线向量作为残差，和把这个垂线向量的模（点到直线的距离）作为残差效果是一样的
 		residual[0] = nu.x() / de.norm();
 		residual[1] = nu.y() / de.norm();
 		residual[2] = nu.z() / de.norm();

@@ -194,7 +194,8 @@ int main(int argc, char **argv)
     ros::init(argc, argv, "laserOdometry");
     ros::NodeHandle nh;
 
-    nh.param<int>("mapping_skip_frame", skipFrameNum, 2);
+    //; 下采样的频率，降频几倍向后端发送数据
+    nh.param<int>("mapping_skip_frame", skipFrameNum, 2);  
 
     printf("Mapping %d Hz \n", 10 / skipFrameNum);
     // 订阅提取出来的点云
@@ -221,10 +222,19 @@ int main(int argc, char **argv)
     nav_msgs::Path laserPath;
 
     int frameCount = 0;
-    ros::Rate rate(100);
+    ros::Rate rate(100);  //; 100hz的频率执行while循环
 
     while (ros::ok())
     {
+        //; 这里spinOnce和spin在subcriber的回调函数的调用上有区别：
+        //; 1.如果使用spin，通常放在主函数最后，而且没有while(ros::ok())的死循环。当main函数执行到spin后，程序阻塞。
+        //;   当有消息到来时，会接着自动调用回调函数
+        //; 2.如果使用spinOnce，通常配合while(ros::ok())使用。此时如果发来一个消息，但是还没有执行spinOnce，那么也不会进入
+        //;   回调函数。只有当手动的调用了spinOnce后才会去执行一次回调函数。此时消息队列中可能有很多消息了，但是此时还是只会读取
+        //;   一条消息进行执行。因此配合while使用就是为了能够一直调用回调函数，否则只调用一次就结束了。
+        //; 3.总结来说，spinOnce就相当于在主函数需要有逻辑进行循环处理，而subcriber还要处理回调函数，此时就使用spinOnce。
+        //;   如果这个节点的程序逻辑都在某个消息的回调函数中处理，那么直接使用spin等待循环调用即可。从下面的操作就可以看出来，
+        //;   使用spinOnce的想法就是在回调函数中仅仅处理数据，把数据存到buf中。然后在while()中对数据进行逻辑处理。
         ros::spinOnce();    // 触发一次回调，参考https://www.cnblogs.com/liu-fa/p/5925381.html
 
         // 首先确保订阅的五个消息都有，有一个队列为空都不行
@@ -245,7 +255,7 @@ int main(int argc, char **argv)
                 timeSurfPointsLessFlat != timeLaserCloudFullRes)
             {
                 printf("unsync messeage!");
-                ROS_BREAK();
+                ROS_BREAK();   //; 时间戳有问题，跳出整个while(ros::ok())的循环
             }
             // 分别将五个点云消息取出来，同时转成pcl的点云格式
             mBuf.lock();
@@ -273,6 +283,8 @@ int main(int argc, char **argv)
             TicToc t_whole;
             // initializing
             // 一个什么也不干的初始化
+            //; 这里跳过第一帧，就是进行了初始化。因为下面的else是为了找和上一帧对应的角点和面点的约束，因此第一帧需要跳过。
+            //; 但是if else 后面会把第一帧的特征点都存到pcl的kdtree里面，便于和下一帧的角点和面点进行匹配
             if (!systemInited)
             {
                 systemInited = true;
@@ -313,9 +325,12 @@ int main(int argc, char **argv)
                     // 寻找角点的约束
                     for (int i = 0; i < cornerPointsSharpNum; ++i)
                     {
-                        // 运动补偿
+                        // 运动补偿（注意去畸变去的是由于lidar运动带来的畸变，如果lidar不运动，即使它是转着在扫描，也不会产生畸变，只不过时间戳不对应）
+                        //! 问题：把这一帧的角点对齐到起始时间上去，为什么在这里才调用？在前端进行点云特征点提取之前不就应该调用去畸变吗？
                         TransformToStart(&(cornerPointsSharp->points[i]), &pointSel);
                         // 在上一帧所有角点构成的kdtree中寻找距离当前帧最近的一个点
+                        //; 参数：这个点，在kdtree中找距离这个点最近的几个点，在kdtree中找到的最近的点的id，距离
+                        //; 因为可以找最近的几个点，所以后面两个参数都是数组
                         kdtreeCornerLast->nearestKSearch(pointSel, 1, pointSearchInd, pointSearchSqDis);
 
                         int closestPointInd = -1, minPointInd2 = -1;
@@ -328,11 +343,21 @@ int main(int argc, char **argv)
 
                             double minPointSqDis2 = DISTANCE_SQ_THRESHOLD;
                             // search in the direction of increasing scan line
+                            //! 问题：下面到底是怎么找的没有理解特别明白，这个排序应该是和后面的kdtree的排序有关，需要去看看后面的程序，
+                            //!      此外也找资料看看kdtrees
                             // 寻找角点，在刚刚角点id上下分别继续寻找，目的是找到最近的角点，由于其按照线束进行排序，所以就是向上找
                             for (int j = closestPointInd + 1; j < (int)laserCloudCornerLast->points.size(); ++j)
                             {
                                 // if in the same scan line, continue
                                 // 不找同一根线束的
+                                //; 注意不能找同一根线束的，因为这样就变成了当前帧的角点，到上一帧的某个平面上的一根线的距离了。
+                                //; 而我们实际想找的线，是竖直方向（垂直于运动方向，或者说垂直于地面的一根线）
+                                //;           |  /       /
+                                //;           | /       /     
+                                //;           |/       /
+                                //;           |\       \
+                                //;           | \       \
+                                //;           |  \       \
                                 if (int(laserCloudCornerLast->points[j].intensity) <= closestPointScanID)
                                     continue;
 
@@ -403,6 +428,9 @@ int main(int argc, char **argv)
                                 s = (cornerPointsSharp->points[i].intensity - int(cornerPointsSharp->points[i].intensity)) / SCAN_PERIOD;
                             else
                                 s = 1.0;
+                            //; 注意这里传入的是当前点的原始坐标，是没有经过运动补偿的。这么做的原因很简单，因为前面的运动补偿是
+                            //; 基于匀速运动模型做的一个粗略补偿，就是为了大致选择上一帧的两个点形成一条直线，然后这里计算当前点
+                            //; 到这条直线之间的距离作为残差，来估计当前帧到上一帧的位姿变化，所以这里自然要使用原始的数据点
                             ceres::CostFunction *cost_function = LidarEdgeFactor::Create(curr_point, last_point_a, last_point_b, s);
                             problem.AddResidualBlock(cost_function, loss_function, para_q, para_t);
                             corner_correspondence++;
@@ -410,6 +438,7 @@ int main(int argc, char **argv)
                     }
 
                     // find correspondence for plane features
+                    //; 上一帧的面点的寻找：第一个点仍然是离当前点最近的面点，第二个点是和第一个点有相同的线数，第三个点和前两个点有不同的线数
                     for (int i = 0; i < surfPointsFlatNum; ++i)
                     {
                         TransformToStart(&(surfPointsFlat->points[i]), &pointSel);
@@ -528,15 +557,15 @@ int main(int argc, char **argv)
                     // 调用ceres求解器求解
                     TicToc t_solver;
                     ceres::Solver::Options options;
-                    options.linear_solver_type = ceres::DENSE_QR;
-                    options.max_num_iterations = 4;
+                    options.linear_solver_type = ceres::DENSE_QR;  //; 这里不像后端是一个稀疏的结果，而是稠密的结果
+                    options.max_num_iterations = 4;   //; 前端，实时性有要求
                     options.minimizer_progress_to_stdout = false;
                     ceres::Solver::Summary summary;
                     ceres::Solve(options, &problem, &summary);
                     printf("solver time %f ms \n", t_solver.toc());
                 }
                 printf("optimization twice time %f \n", t_opt.toc());
-                // 这里的w_curr 实际上是 w_last
+                // 这里等号右边的w_curr 实际上是 w_last，等号左边的就是更新后的w_curr
                 t_w_curr = t_w_curr + q_w_curr * t_last_curr;
                 q_w_curr = q_w_curr * q_last_curr;
             }
@@ -544,6 +573,7 @@ int main(int argc, char **argv)
             TicToc t_pub;
             // 发布lidar里程记结果
             // publish odometry
+            //; odometry的数据发布出去，给后端使用
             nav_msgs::Odometry laserOdometry;
             laserOdometry.header.frame_id = "/camera_init";
             laserOdometry.child_frame_id = "/laser_odom";
@@ -558,6 +588,7 @@ int main(int argc, char **argv)
             laserOdometry.pose.pose.position.z = t_w_curr.z();
             pubLaserOdometry.publish(laserOdometry);
 
+            //; Path数据发布出去是给rviz显示使用的
             geometry_msgs::PoseStamped laserPose;
             laserPose.header = laserOdometry.header;
             laserPose.pose = laserOdometry.pose.pose;
@@ -607,7 +638,7 @@ int main(int argc, char **argv)
             if (frameCount % skipFrameNum == 0)
             {
                 frameCount = 0;
-
+                //; 角点，面点，所有点 都发送给后端。因为后端是一个低频高精度的优化，点越多，理论上来说约束越多，精度越高
                 sensor_msgs::PointCloud2 laserCloudCornerLast2;
                 pcl::toROSMsg(*laserCloudCornerLast, laserCloudCornerLast2);
                 laserCloudCornerLast2.header.stamp = ros::Time().fromSec(timeSurfPointsLessFlat);
