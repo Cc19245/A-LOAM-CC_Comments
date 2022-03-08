@@ -58,6 +58,7 @@
 		"*.cc": "cpp",
 		"vector": "cpp",
 		"mutex": "cpp",
+        "functional": "cpp",
 		"list": "cpp",
 		"xtree": "cpp",
 		"map": "cpp",

@@ -1,8 +1,13 @@
 // Author:   Tong Qin               qintonguav@gmail.com
 // 	         Shaozu Cao 		    saozu.cao@connect.ust.hk
 
-//; 本文件实现Kitti数据集的数据（图像、机关雷达点云）转成rosbag的包，便于下次直接播放
-
+//; 本文件ros节点实现Kitti数据集的数据（包括图像、激光雷达点云、轨迹真值）在ros中的数据topic发送，
+//;   此外也可以选择本次播放的同时转成rosbag的包，便于下次直接播放
+//; 注意kitti数据集中包括的图像是双目图像，然后有一个专门的.txt文件保存图像的时间戳。
+//; 1.读取图像：确定图像总张数，每次更新要读取的图像文件名，然后发布ros topic。如果选择输出ros包，此时rosbag自动记录
+//; 2.读取点云：为了降低存储空间，kitti的点云使用bin文件存储，而不是通常的pcd文件。此时使用C++的二进制文件数据流
+//;   进行读取，然后发布ros topic。如果选择输出ros包，此时rosbag自动记录
+//; 3.读取ground truth文件，操作与上述类似
 #include <iostream>
 #include <fstream>
 #include <iterator>
@@ -98,7 +103,9 @@ int main(int argc, char** argv)
         cv::Mat left_image = cv::imread(left_image_path.str(), CV_LOAD_IMAGE_GRAYSCALE);
         right_image_path << dataset_folder << "sequences/" + sequence_number + "/image_1/" << std::setfill('0') << std::setw(6) << line_num << ".png";
         cv::Mat right_image = cv::imread(left_image_path.str(), CV_LOAD_IMAGE_GRAYSCALE);
+        
         // 得到ground truth的文件
+        //; 这里注释掉了是因为xieqi讲的时候没有下载kitti的ground truth文件，所以这里就没有读取
         // std::getline(ground_truth_file, line);
         // std::stringstream pose_stream(line);
         // std::string s;

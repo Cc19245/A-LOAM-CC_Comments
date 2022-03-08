@@ -86,6 +86,7 @@ template <typename PointT>
 void removeClosedPointCloud(const pcl::PointCloud<PointT> &cloud_in,
                               pcl::PointCloud<PointT> &cloud_out, float thres)
 {
+    //; 在pcl库中有很多这种操作，因为有的时候入参和出参可以是同一个参数，这样就不需要在函数中定义局部变量，节省空间
     if (&cloud_in != &cloud_out)
     {
         cloud_out.header = cloud_in.header;
@@ -96,6 +97,8 @@ void removeClosedPointCloud(const pcl::PointCloud<PointT> &cloud_in,
     // 把点云距离小于给定阈值的去除掉
     for (size_t i = 0; i < cloud_in.points.size(); ++i)
     {
+        //; 下面的操作就是如果距离小于给定的阈值，那么就不会把这个输入点云拷贝到输出点云中
+        //; 其实这里如果入参和出参是同一个参数的时候，这里的操作就相当于是一个二重指针了
         if (cloud_in.points[i].x * cloud_in.points[i].x + cloud_in.points[i].y * cloud_in.points[i].y + cloud_in.points[i].z * cloud_in.points[i].z < thres * thres)
             continue;
         cloud_out.points[j] = cloud_in.points[i];
@@ -106,14 +109,17 @@ void removeClosedPointCloud(const pcl::PointCloud<PointT> &cloud_in,
         cloud_out.points.resize(j);
     }
 
-    cloud_out.height = 1;
-    cloud_out.width = static_cast<uint32_t>(j);
+    //; 下面损失掉了一些原来的点云信息，由于上面对阈值内的点进行移除了，所以原来的二维数组中有些位置空缺了，
+    //; 现在只能把原来的二维数组变成一维数组
+    cloud_out.height = 1;  //; 点云的线数，就是这些点是什么高度的激光发射器得到的
+    cloud_out.width = static_cast<uint32_t>(j);  //; 当前线的点云中所有点的个数
     cloud_out.is_dense = true;
 }
 // 订阅lidar消息
 void laserCloudHandler(const sensor_msgs::PointCloud2ConstPtr &laserCloudMsg)
 {
-    // 如果系统没有初始化的话，就等几帧
+    // 如果系统没有初始化的话，就等几帧。主要是为了在实际使用的时候等待传感器数据稳定。
+    //; 但是这里由于使用的是kitti数据集，数据是稳定的，所以这里systemDelay设置成了0
     if (!systemInited)
     { 
         systemInitCount++;
@@ -139,7 +145,7 @@ void laserCloudHandler(const sensor_msgs::PointCloud2ConstPtr &laserCloudMsg)
     // 去除距离小于阈值的点
     removeClosedPointCloud(laserCloudIn, laserCloudIn, MINIMUM_RANGE);
 
-    // 计算起始点和结束点的角度，由于激光雷达是顺时针旋转，这里取反就相当于转成了逆时针
+    // 计算起始点和结束点的角度，由于激光雷达是顺时针旋转，这里取反就相当于转成了逆时针，逆时针旋转和我们常使用的规定正方向一致
     int cloudSize = laserCloudIn.points.size();
     float startOri = -atan2(laserCloudIn.points[0].y, laserCloudIn.points[0].x);
     // atan2范围是[-Pi,PI]，这里加上2PI是为了保证起始到结束相差2PI符合实际
@@ -168,12 +174,19 @@ void laserCloudHandler(const sensor_msgs::PointCloud2ConstPtr &laserCloudMsg)
         point.x = laserCloudIn.points[i].x;
         point.y = laserCloudIn.points[i].y;
         point.z = laserCloudIn.points[i].z;
-        // 计算他的俯仰角
+        // Step 1 计算这个点所属的线数id。因为loam当时的激光雷达驱动还不支持得到的点云中包含线数
+        //        但是现在的激光雷达驱动中（比如LIO-SAM）就可以直接得到点云的线数了，就不用进行如下处理了
+        // 计算他的俯仰角。z方向是朝前的
         float angle = atan(point.z / sqrt(point.x * point.x + point.y * point.y)) * 180 / M_PI;
         int scanID = 0;
         // 计算是第几根scan
+        //; 16线的激光雷达，俯仰角范围是30度，那么相邻的两根线之间的角度是30/(16-1)=2°
         if (N_SCANS == 16)
         {
+            //; 1.这里+15是为了补偿掉朝下的-15度，因为最下面的一根线的id是0。
+            //; 2./2是因为两根线之间的角度是2度，所以这里/2就相当于在算是第几根线
+            //; 3.+0.5是为了实现四舍五入，因为int是强制的取整。如果是12.4，四舍五入是12，+0.5=12.9强制取整还是12
+            //;    如果是12.5，四舍五入是13，+0.5=13.0,强制取整就是13
             scanID = int((angle + 15) / 2 + 0.5);
             if (scanID > (N_SCANS - 1) || scanID < 0)
             {
@@ -181,6 +194,8 @@ void laserCloudHandler(const sensor_msgs::PointCloud2ConstPtr &laserCloudMsg)
                 continue;
             }
         }
+        //; 下面的操作和上面就不一样了，因为只有16线的激光雷达角度是对称分布的，其他线束的激光雷达不是
+        //; 所以下面判断线束的操作需要看数据手册
         else if (N_SCANS == 32)
         {
             scanID = int((angle + 92.0/3.0) * 3.0 / 4.0);
@@ -210,8 +225,9 @@ void laserCloudHandler(const sensor_msgs::PointCloud2ConstPtr &laserCloudMsg)
             ROS_BREAK();
         }
         //printf("angle %f scanID %d \n", angle, scanID);
-        // 计算水平角
+        // Step 2 计算水平角
         float ori = -atan2(point.y, point.x);
+        //; 下面这个if else操作就是把当前水平角放到之前算出来的起始角度和结束角度之内
         if (!halfPassed)
         { 
             // 确保-PI / 2 < ori - startOri < 3 / 2 * PI
@@ -245,6 +261,8 @@ void laserCloudHandler(const sensor_msgs::PointCloud2ConstPtr &laserCloudMsg)
         // 角度的计算是为了计算相对的起始时刻的时间
         float relTime = (ori - startOri) / (endOri - startOri);
         // 整数部分是scan的索引，小数部分是相对起始时刻的时间
+        //; 1.由于之前没有读取强度值，所以这里就存储我们想要的变量：时间戳
+        //; 2.实际上，这些操作在硬件驱动层就可以完成，所以现在的很多激光雷达会给每一个点云赋值一个时间戳，不用自己计算
         point.intensity = scanID + scanPeriod * relTime;
         // 根据scan的idx送入各自数组
         laserCloudScans[scanID].push_back(point); 
@@ -254,11 +272,14 @@ void laserCloudHandler(const sensor_msgs::PointCloud2ConstPtr &laserCloudMsg)
     printf("points size %d \n", cloudSize);
 
     pcl::PointCloud<PointType>::Ptr laserCloud(new pcl::PointCloud<PointType>());
-    // 全部集合到一个点云里面去，但是使用两个数组标记其实和结果，这里分别+5和-6是为了计算曲率方便
+    // 全部集合到一个点云里面去，但是使用两个数组标记起始和结果，这里分别+5和-6是为了计算曲率方便
     for (int i = 0; i < N_SCANS; i++)
     { 
+        //; 下面+5 -6是因为算一个点的曲率是通过它左边五个点和右边五个点计算曲率，
+        //; 因此一个线束上的点，其开头5个和末尾5个点是不会被计算曲率的
         scanStartInd[i] = laserCloud->size() + 5;
-        *laserCloud += laserCloudScans[i];
+        //! 这里指针取内容，然后+=，怎么理解这个+=？是运算符重载吗？
+        *laserCloud += laserCloudScans[i];  //; laserCloudScans[i]的数据类型：  pcl::PointCloud<PointType>
         scanEndInd[i] = laserCloud->size() - 6;
     }
 
@@ -495,18 +516,20 @@ int main(int argc, char **argv)
     ros::init(argc, argv, "scanRegistration");
     ros::NodeHandle nh;
     // 从配置文件中获取多少线的激光雷达
-    nh.param<int>("scan_line", N_SCANS, 16);
-    // 最小有效距离
+    nh.param<int>("scan_line", N_SCANS, 16);  //; 如果在launch文件中读不到这个参数，那么就赋值成默认值16，因为16线激光雷达是最常见的
+    // 最小有效距离，激光雷达扫描到的在这里距离之内的点直接舍弃掉，因为这部分距离可能是激光雷达所在的载体，是没有意义的
     nh.param<double>("minimum_range", MINIMUM_RANGE, 0.1);
 
     printf("scan line number %d \n", N_SCANS);
-    // 只有线束是16 32 64的才可以继续
+    // 只有线束是16 32 64的才可以继续。目前的激光雷达最高是128线，但是a-loam的代码中只支持下面三种情况
     if(N_SCANS != 16 && N_SCANS != 32 && N_SCANS != 64)
     {
         printf("only support velodyne with 16, 32 or 64 scan line!");
         return 0;
     }
 
+
+    //; velodyne_points是rosbag发布的消息
     ros::Subscriber subLaserCloud = nh.subscribe<sensor_msgs::PointCloud2>("/velodyne_points", 100, laserCloudHandler);
 
     pubLaserCloud = nh.advertise<sensor_msgs::PointCloud2>("/velodyne_cloud_2", 100);
