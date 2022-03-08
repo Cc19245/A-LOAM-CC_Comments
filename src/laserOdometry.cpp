@@ -97,6 +97,7 @@ Eigen::Vector3d t_w_curr(0, 0, 0);
 double para_q[4] = {0, 0, 0, 1};
 double para_t[3] = {0, 0, 0};
 
+//; 下面两个全局变量，存储上一帧到当前帧的旋转和平移。用于匀速运动模型进行当前帧的激光雷达数据的去畸变
 Eigen::Map<Eigen::Quaterniond> q_last_curr(para_q);
 Eigen::Map<Eigen::Vector3d> t_last_curr(para_t);
 
@@ -108,6 +109,7 @@ std::queue<sensor_msgs::PointCloud2ConstPtr> fullPointsBuf;
 std::mutex mBuf;
 
 // undistort lidar point
+//; 去除lidar的畸变：对齐到开始时间
 void TransformToStart(PointType const *const pi, PointType *const po)
 {
     //interpolation ratio
@@ -120,7 +122,8 @@ void TransformToStart(PointType const *const pi, PointType *const po)
     //s = 1;
     // 所有点的操作方式都是一致的，相当于从结束时刻补偿到起始时刻
     // 这里相当于是一个匀速模型的假设
-    Eigen::Quaterniond q_point_last = Eigen::Quaterniond::Identity().slerp(s, q_last_curr);
+    //; 这里是用四元数进行插值，看一下这个接口
+    Eigen::Quaterniond q_point_last = Eigen::Quaterniond::Identity().slerp(s, q_last_curr);  //; q_last_curr 上一帧到当前帧的四元数
     Eigen::Vector3d t_point_last = s * t_last_curr;
     Eigen::Vector3d point(pi->x, pi->y, pi->z);
     Eigen::Vector3d un_point = q_point_last * point + t_point_last;
@@ -132,15 +135,14 @@ void TransformToStart(PointType const *const pi, PointType *const po)
 }
 
 // transform all lidar points to the start of the next frame
-
 void TransformToEnd(PointType const *const pi, PointType *const po)
 {
     // undistort point first
     pcl::PointXYZI un_point_tmp;
-    TransformToStart(pi, &un_point_tmp);
+    TransformToStart(pi, &un_point_tmp);  //; 先补偿到起始时刻
 
     Eigen::Vector3d un_point(un_point_tmp.x, un_point_tmp.y, un_point_tmp.z);
-    Eigen::Vector3d point_end = q_last_curr.inverse() * (un_point - t_last_curr);
+    Eigen::Vector3d point_end = q_last_curr.inverse() * (un_point - t_last_curr);  //; 再从起始时刻转到结束时刻
 
     po->x = point_end.x();
     po->y = point_end.y();
@@ -149,6 +151,7 @@ void TransformToEnd(PointType const *const pi, PointType *const po)
     //Remove distortion time info
     po->intensity = int(pi->intensity);
 }
+
 // 操作都是送去各自的队列中
 void laserCloudSharpHandler(const sensor_msgs::PointCloud2ConstPtr &cornerPointsSharp2)
 {

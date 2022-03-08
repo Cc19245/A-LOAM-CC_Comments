@@ -278,7 +278,7 @@ void laserCloudHandler(const sensor_msgs::PointCloud2ConstPtr &laserCloudMsg)
         //; 下面+5 -6是因为算一个点的曲率是通过它左边五个点和右边五个点计算曲率，
         //; 因此一个线束上的点，其开头5个和末尾5个点是不会被计算曲率的
         scanStartInd[i] = laserCloud->size() + 5;
-        //! 这里指针取内容，然后+=，怎么理解这个+=？是运算符重载吗？
+        //! 问题：这里指针取内容，然后+=，怎么理解这个+=？是运算符重载吗？
         *laserCloud += laserCloudScans[i];  //; laserCloudScans[i]的数据类型：  pcl::PointCloud<PointType>
         scanEndInd[i] = laserCloud->size() - 6;
     }
@@ -287,14 +287,26 @@ void laserCloudHandler(const sensor_msgs::PointCloud2ConstPtr &laserCloudMsg)
     // 开始计算曲率
     for (int i = 5; i < cloudSize - 5; i++)
     { 
+        //; 但是从这里可以发现，曲率计算是把所有线束拼起来的点云的前5个点到倒数5个点的曲率进行了计算，而不是每个线束的前5到倒数5个点曲率进行计算。
+        //; 实际上这里只是为了程序书写方便，后面会把这些点筛掉
         float diffX = laserCloud->points[i - 5].x + laserCloud->points[i - 4].x + laserCloud->points[i - 3].x + laserCloud->points[i - 2].x + laserCloud->points[i - 1].x - 10 * laserCloud->points[i].x + laserCloud->points[i + 1].x + laserCloud->points[i + 2].x + laserCloud->points[i + 3].x + laserCloud->points[i + 4].x + laserCloud->points[i + 5].x;
         float diffY = laserCloud->points[i - 5].y + laserCloud->points[i - 4].y + laserCloud->points[i - 3].y + laserCloud->points[i - 2].y + laserCloud->points[i - 1].y - 10 * laserCloud->points[i].y + laserCloud->points[i + 1].y + laserCloud->points[i + 2].y + laserCloud->points[i + 3].y + laserCloud->points[i + 4].y + laserCloud->points[i + 5].y;
+        //; 如果是同一线束上的点，diffZ应该恒为0？（z是高度方向？）
         float diffZ = laserCloud->points[i - 5].z + laserCloud->points[i - 4].z + laserCloud->points[i - 3].z + laserCloud->points[i - 2].z + laserCloud->points[i - 1].z - 10 * laserCloud->points[i].z + laserCloud->points[i + 1].z + laserCloud->points[i + 2].z + laserCloud->points[i + 3].z + laserCloud->points[i + 4].z + laserCloud->points[i + 5].z;
         // 存储曲率，索引
         cloudCurvature[i] = diffX * diffX + diffY * diffY + diffZ * diffZ;
-        cloudSortInd[i] = i;
+        cloudSortInd[i] = i;  //; 索引
         cloudNeighborPicked[i] = 0;
         cloudLabel[i] = 0;
+        //; 曲率计算原理：
+        //; 1.平面：diffX由于右边5个点和左边五个点的差值正好相反，所以相加后=0；diffY由于y值一直相等，所以diffY=0；diffZ恒为0。最后曲率为0
+        //; 2.角点：假设i点是一个三角形的顶点，则diffX由于右边5个点和左边五个点的差值正好相反，所以相加后=0；diffY由于i的y值比每个点的y值都大，所以
+        //;   最后结果是一个很大的负数；diffZ恒为0。最后曲率为一个很大的数
+        //;     ^ y      /\           
+        //;     |       /  \          
+        //;     |      /    \         
+        //;     |     /      \     
+        //;     -------> x
     }
 
 
@@ -309,7 +321,7 @@ void laserCloudHandler(const sensor_msgs::PointCloud2ConstPtr &laserCloudMsg)
     // 遍历每个scan
     for (int i = 0; i < N_SCANS; i++)
     {
-        // 没有有效的点了，就continue
+        // 没有有效的点了，就continue。因为是要等分为6等份
         if( scanEndInd[i] - scanStartInd[i] < 6)
             continue;
         // 用来存储不太平整的点
@@ -323,6 +335,7 @@ void laserCloudHandler(const sensor_msgs::PointCloud2ConstPtr &laserCloudMsg)
 
             TicToc t_tmp;
             // 对点云按照曲率进行排序，小的在前，大的在后
+            //; stl的排序函数，参数：起始地址，结束地址+1，排序函数。相当于是对 [起始地址，结束地址+1) 范围的曲率进行排序
             std::sort (cloudSortInd + sp, cloudSortInd + ep + 1, comp);
             t_q_sort += t_tmp.toc();
 
@@ -336,6 +349,7 @@ void laserCloudHandler(const sensor_msgs::PointCloud2ConstPtr &laserCloudMsg)
                 // 看看这个点是否是有效点，同时曲率是否大于阈值
                 if (cloudNeighborPicked[ind] == 0 &&
                     cloudCurvature[ind] > 0.1)
+                    //; 0.1是阈值，>0.1是角点，<0.1是面点
                 {
 
                     largestPickedNum++;
@@ -346,6 +360,8 @@ void laserCloudHandler(const sensor_msgs::PointCloud2ConstPtr &laserCloudMsg)
                         cloudLabel[ind] = 2;
                         // cornerPointsSharp存放大曲率的点
                         cornerPointsSharp.push_back(laserCloud->points[ind]);
+                        //; 这里把大曲率的点也存储到了曲率稍大的点中，因为帧间里程计是把本帧大曲率的点和上一帧曲率稍大的所有点进行匹配，
+                        //; 自然上一帧曲率稍大的点中也应该包含大曲率的点
                         cornerPointsLessSharp.push_back(laserCloud->points[ind]);
                     }
                     // 以及20个曲率稍微大一些的点
@@ -365,6 +381,7 @@ void laserCloudHandler(const sensor_msgs::PointCloud2ConstPtr &laserCloudMsg)
                     // 为了保证特征点不过度集中，将选中的点周围5个点都置1,避免后续会选到
                     for (int l = 1; l <= 5; l++)
                     {
+                        //! 问题：没懂这是什么意思?
                         // 查看相邻点距离是否差异过大，如果差异过大说明点云在此不连续，是特征边缘，就会是新的特征，因此就不置位了
                         float diffX = laserCloud->points[ind + l].x - laserCloud->points[ind + l - 1].x;
                         float diffY = laserCloud->points[ind + l].y - laserCloud->points[ind + l - 1].y;
@@ -442,6 +459,10 @@ void laserCloudHandler(const sensor_msgs::PointCloud2ConstPtr &laserCloudMsg)
             for (int k = sp; k <= ep; k++)
             {
                 // 这里可以看到，剩下来的点都是一般平坦，这个也符合实际
+                //; 1.实际挑选的平坦的点是-1，默认值是0，曲率较大的点是1，曲率非常大的点是2。这里就是默认其他的点都是面点，
+                //;   这个虽然看起来比较暴力，但是有一定的道理，因为现实世界中基本都是面点，如果都是角点那么这个世界就都是毛毛刺刺的了
+                //; 2.但是这里确实也会存在一些问题，因为角点只提了20个，实际中可能遇到角点很多的情况，此时就会把一些角点误认为面点了，
+                //;   但是在后面mapping里面会对角点和面点进行校验，这样保证构成的约束不会出错
                 if (cloudLabel[k] <= 0)
                 {
                     surfPointsLessFlatScan->push_back(laserCloud->points[k]);
@@ -453,7 +474,7 @@ void laserCloudHandler(const sensor_msgs::PointCloud2ConstPtr &laserCloudMsg)
         pcl::VoxelGrid<PointType> downSizeFilter;
         // 一般平坦的点比较多，所以这里做一个体素滤波
         downSizeFilter.setInputCloud(surfPointsLessFlatScan);
-        downSizeFilter.setLeafSize(0.2, 0.2, 0.2);
+        downSizeFilter.setLeafSize(0.2, 0.2, 0.2);  //; 在边长为0.2的正方体内只保存一个点，这个点是正方体内所有点的重心
         downSizeFilter.filter(surfPointsLessFlatScanDS);
 
         surfPointsLessFlat += surfPointsLessFlatScanDS;
@@ -466,7 +487,7 @@ void laserCloudHandler(const sensor_msgs::PointCloud2ConstPtr &laserCloudMsg)
     pcl::toROSMsg(*laserCloud, laserCloudOutMsg);
     laserCloudOutMsg.header.stamp = laserCloudMsg->header.stamp;
     laserCloudOutMsg.header.frame_id = "/camera_init";
-    pubLaserCloud.publish(laserCloudOutMsg);
+    pubLaserCloud.publish(laserCloudOutMsg);  //; 这里也发布了总的点云数据
 
     sensor_msgs::PointCloud2 cornerPointsSharpMsg;
     pcl::toROSMsg(cornerPointsSharp, cornerPointsSharpMsg);
@@ -506,6 +527,7 @@ void laserCloudHandler(const sensor_msgs::PointCloud2ConstPtr &laserCloudMsg)
         }
     }
 
+    //; 判断这次回调的时间，因为点云一般是10HZ，这里处理如果超过100ms，就可能会发生丢帧的现象，此时就是算力不够
     printf("scan registration time %f ms *************\n", t_whole.toc());
     if(t_whole.toc() > 100)
         ROS_WARN("scan registration process over 100ms");
