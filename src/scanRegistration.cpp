@@ -115,7 +115,19 @@ void removeClosedPointCloud(const pcl::PointCloud<PointT> &cloud_in,
     cloud_out.width = static_cast<uint32_t>(j);  //; 当前线的点云中所有点的个数
     cloud_out.is_dense = true;
 }
-// 订阅lidar消息
+
+
+/**
+ * @brief 订阅原始的LiDAR点云消息，并提取点云特征，然后发给里程计模块
+ *  1.由于当时LOAM使用的激光雷达没有线束、点扫描的时间戳等信息，所以这里先手动计算：
+ *    通过计算俯仰角来得到线数，通过计算点在水平平面的角度来计算时间
+ *  2.对所有点计算曲率：对每一个线束上的点利用它左右五个点来计算曲率。
+ *  3.针对每条线束的一圈，分成6等分来均匀挑选特征点。对于每一份，对其中点的曲率进行排序，挑选曲率大的是线点，
+ *    挑选曲率小的是面点
+ *  4.最后处理完成，把提取的特征点（线点和面点）发送给里程计模块
+ * 
+ * @param[in] laserCloudMsg 
+ */
 void laserCloudHandler(const sensor_msgs::PointCloud2ConstPtr &laserCloudMsg)
 {
     // 如果系统没有初始化的话，就等几帧。主要是为了在实际使用的时候等待传感器数据稳定。
@@ -150,8 +162,7 @@ void laserCloudHandler(const sensor_msgs::PointCloud2ConstPtr &laserCloudMsg)
     float startOri = -atan2(laserCloudIn.points[0].y, laserCloudIn.points[0].x);
     // atan2范围是[-Pi,PI]，这里加上2PI是为了保证起始到结束相差2PI符合实际
     float endOri = -atan2(laserCloudIn.points[cloudSize - 1].y,
-                          laserCloudIn.points[cloudSize - 1].x) +
-                   2 * M_PI;
+                          laserCloudIn.points[cloudSize - 1].x) + 2 * M_PI;
 
     // 总有一些例外，比如这里大于3PI，和小于PI，就需要做一些调整到合理范围
     if (endOri - startOri > 3 * M_PI)
@@ -287,8 +298,8 @@ void laserCloudHandler(const sensor_msgs::PointCloud2ConstPtr &laserCloudMsg)
     // 开始计算曲率
     for (int i = 5; i < cloudSize - 5; i++)
     { 
-        //; 但是从这里可以发现，曲率计算是把所有线束拼起来的点云的前5个点到倒数5个点的曲率进行了计算，而不是每个线束的前5到倒数5个点曲率进行计算。
-        //; 实际上这里只是为了程序书写方便，后面会把这些点筛掉
+        //; 但是从这里可以发现，曲率计算是把所有线束拼起来的点云的前5个点到倒数5个点的曲率进行了计算，
+        //; 而不是每个线束的前5到倒数5个点曲率进行计算。实际上这里只是为了程序书写方便，后面会把这些点筛掉
         float diffX = laserCloud->points[i - 5].x + laserCloud->points[i - 4].x + laserCloud->points[i - 3].x + laserCloud->points[i - 2].x + laserCloud->points[i - 1].x - 10 * laserCloud->points[i].x + laserCloud->points[i + 1].x + laserCloud->points[i + 2].x + laserCloud->points[i + 3].x + laserCloud->points[i + 4].x + laserCloud->points[i + 5].x;
         float diffY = laserCloud->points[i - 5].y + laserCloud->points[i - 4].y + laserCloud->points[i - 3].y + laserCloud->points[i - 2].y + laserCloud->points[i - 1].y - 10 * laserCloud->points[i].y + laserCloud->points[i + 1].y + laserCloud->points[i + 2].y + laserCloud->points[i + 3].y + laserCloud->points[i + 4].y + laserCloud->points[i + 5].y;
         //; 如果是同一线束上的点，diffZ应该恒为0？（z是高度方向？）
@@ -551,26 +562,34 @@ int main(int argc, char **argv)
     }
 
 
-    //; velodyne_points是rosbag发布的消息
-    ros::Subscriber subLaserCloud = nh.subscribe<sensor_msgs::PointCloud2>("/velodyne_points", 100, laserCloudHandler);
+    //; velodyne_points是rosbag发布的消息，也就是原始的点云消息
+    ros::Subscriber subLaserCloud = nh.subscribe<sensor_msgs::PointCloud2>(
+        "/velodyne_points", 100, laserCloudHandler);
 
-    pubLaserCloud = nh.advertise<sensor_msgs::PointCloud2>("/velodyne_cloud_2", 100);
+    pubLaserCloud = nh.advertise<sensor_msgs::PointCloud2>(
+        "/velodyne_cloud_2", 100);
 
-    pubCornerPointsSharp = nh.advertise<sensor_msgs::PointCloud2>("/laser_cloud_sharp", 100);
+    pubCornerPointsSharp = nh.advertise<sensor_msgs::PointCloud2>(
+        "/laser_cloud_sharp", 100);
 
-    pubCornerPointsLessSharp = nh.advertise<sensor_msgs::PointCloud2>("/laser_cloud_less_sharp", 100);
+    pubCornerPointsLessSharp = nh.advertise<sensor_msgs::PointCloud2>(
+        "/laser_cloud_less_sharp", 100);
 
-    pubSurfPointsFlat = nh.advertise<sensor_msgs::PointCloud2>("/laser_cloud_flat", 100);
+    pubSurfPointsFlat = nh.advertise<sensor_msgs::PointCloud2>(
+        "/laser_cloud_flat", 100);
 
-    pubSurfPointsLessFlat = nh.advertise<sensor_msgs::PointCloud2>("/laser_cloud_less_flat", 100);
+    pubSurfPointsLessFlat = nh.advertise<sensor_msgs::PointCloud2>(
+        "/laser_cloud_less_flat", 100);
 
-    pubRemovePoints = nh.advertise<sensor_msgs::PointCloud2>("/laser_remove_points", 100);
+    pubRemovePoints = nh.advertise<sensor_msgs::PointCloud2>(
+        "/laser_remove_points", 100);
 
     if(PUB_EACH_LINE)
     {
         for(int i = 0; i < N_SCANS; i++)
         {
-            ros::Publisher tmp = nh.advertise<sensor_msgs::PointCloud2>("/laser_scanid_" + std::to_string(i), 100);
+            ros::Publisher tmp = nh.advertise<sensor_msgs::PointCloud2>(
+                "/laser_scanid_" + std::to_string(i), 100);
             pubEachScan.push_back(tmp);
         }
     }

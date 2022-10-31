@@ -237,7 +237,18 @@ void laserOdometryHandler(const nav_msgs::Odometry::ConstPtr &laserOdometry)
 	pubOdomAftMappedHighFrec.publish(odomAftMapped);
 }
 
-// 主处理线程
+
+/**
+ * @brief scan-to-map主处理线程，主要分成一下几步：
+ *  1.取出前端里程计发来的角点、面点、位姿等消息，转成相应的数据格式
+ *  2.使用前端里程计发来的odom系下的位姿 和 维护的odom到map的全局坐标变换，计算当前在map系下的位姿
+ *  3.根据计算的map系下的位姿，计算当前在栅格地图中的位置。如果接近栅格地图边缘，则移动栅格地图
+ *  4.取栅格地图中当前位置附近的几个栅格，构成局部地图
+ *  5.在局部地图中寻找当前帧的最近的角点、面点，并构成直线、平面，然后构造点到线、点到面的残差优化位姿
+ *  6.利用优化后的map系下的位姿 和 odom系下的位姿，更新odom到map系的全局坐标变换
+ *  7.把当前帧的角点和面点加入到栅格地图中
+ *  8.发布最后的地图、里程计等消息，给rviz显示使用 
+ */
 void process()
 {
 	while(1)
@@ -273,6 +284,7 @@ void process()
 				break;
 			}
 
+            // Step 1.取出前端里程计发来的角点、面点和odom信息
 			timeLaserCloudCornerLast = cornerLastBuf.front()->header.stamp.toSec();
 			timeLaserCloudSurfLast = surfLastBuf.front()->header.stamp.toSec();
 			timeLaserCloudFullRes = fullResBuf.front()->header.stamp.toSec();
@@ -317,11 +329,14 @@ void process()
 
 			mBuf.unlock();
 
+            // Step 2.使用前端里程计发来的位姿和维护的odom到map的全局坐标变换，
+            //        计算在地图坐标系下的位置
 			TicToc t_whole;
 			// 根据前端结果，得到后端的一个初始估计值
 			//; 这里还是计算得到P_map_curr
 			transformAssociateToMap();
 
+            // Step 3.寻找当前位置在栅格地图中的格子索引，并且如果当前位置接近栅格地图边缘，则移动栅格地图
 			TicToc t_shift;
 			// 根据初始估计值计算寻找当前位姿在地图中的索引，一个格子边长是50m
 			// 后端的地图本质上是一个以当前点为中心，一个珊格地图
@@ -530,6 +545,8 @@ void process()
 				centerCubeK--;
 				laserCloudCenDepth--;
 			}
+
+            // Step 4.在栅格地图中取当前位置附近的几个局部栅格，组成局部地图
 			// 以上操作相当于维护了一个局部地图，保证当前帧不在这个局部地图的边缘，这样才可以从地图中获取足够的约束
 			int laserCloudValidNum = 0;
 			int laserCloudSurroundNum = 0;
@@ -585,6 +602,7 @@ void process()
 			printf("map prepare time %f ms\n", t_shift.toc());
 			printf("map corner num %d  surf num %d \n", laserCloudCornerFromMapNum, laserCloudSurfFromMapNum);
 			
+            // Step 5.在局部地图中寻找和当前帧的角点、面点对应的线和面，并构造点到线、点到面的残差进行优化
 			// 最终的有效点云数目进行判断，线点>10，面点>50
 			if (laserCloudCornerFromMapNum > 10 && laserCloudSurfFromMapNum > 50)
 			{
@@ -794,9 +812,13 @@ void process()
 			{
 				ROS_WARN("time Map corner and surf num are not enough");
 			}
+
+            // Step 6. 利用优化后的在map系中的位姿 和 前端里程计计算的在odom系下的位姿，
+            //         更新odom到map的全局坐标变换关系
 			//; 利用优化后得到的P_map_curr，和前端发来的P_odom_curr，计算得到P_map_odom
 			transformUpdate();
 
+            // Step 7. 把优化后的当前帧的角点和面点加到栅格地图中
 			TicToc t_add;
 			// 将优化后的当前帧角点加到局部地图中去
 			for (int i = 0; i < laserCloudCornerStackNum; i++)
@@ -850,7 +872,7 @@ void process()
 			}
 			printf("add points time %f ms\n", t_add.toc());
 
-			
+			// Step 8. 发布位姿、地图等消息给rviz显示用
 			TicToc t_filter;
 			// 把当前帧涉及到的局部地图的珊格做一个下采样
 			for (int i = 0; i < laserCloudValidNum; i++)
@@ -968,6 +990,7 @@ void process()
 	}
 }
 
+
 int main(int argc, char **argv)
 {
 	ros::init(argc, argv, "laserMapping");
@@ -981,27 +1004,32 @@ int main(int argc, char **argv)
 	printf("line resolution %f plane resolution %f \n", lineRes, planeRes);
 	downSizeFilterCorner.setLeafSize(lineRes, lineRes,lineRes);
 	downSizeFilterSurf.setLeafSize(planeRes, planeRes, planeRes);
-	// 订阅了点云以及起始位姿
-	ros::Subscriber subLaserCloudCornerLast = nh.subscribe<sensor_msgs::PointCloud2>("/laser_cloud_corner_last", 100, laserCloudCornerLastHandler);
 
-	ros::Subscriber subLaserCloudSurfLast = nh.subscribe<sensor_msgs::PointCloud2>("/laser_cloud_surf_last", 100, laserCloudSurfLastHandler);
+	//; 订阅：里程计发来的降频的角点和面点信息
+	ros::Subscriber subLaserCloudCornerLast = nh.subscribe<sensor_msgs::PointCloud2>(
+        "/laser_cloud_corner_last", 100, laserCloudCornerLastHandler);
+	ros::Subscriber subLaserCloudSurfLast = nh.subscribe<sensor_msgs::PointCloud2>(
+        "/laser_cloud_surf_last", 100, laserCloudSurfLastHandler);
 
-	//; 里程计的消息
-	ros::Subscriber subLaserOdometry = nh.subscribe<nav_msgs::Odometry>("/laser_odom_to_init", 100, laserOdometryHandler);
+	//; 订阅：里程计发来的位姿消息
+	ros::Subscriber subLaserOdometry = nh.subscribe<nav_msgs::Odometry>(
+        "/laser_odom_to_init", 100, laserOdometryHandler);
+	ros::Subscriber subLaserCloudFullRes = nh.subscribe<sensor_msgs::PointCloud2>(
+        "/velodyne_cloud_3", 100, laserCloudFullResHandler);
 
-	ros::Subscriber subLaserCloudFullRes = nh.subscribe<sensor_msgs::PointCloud2>("/velodyne_cloud_3", 100, laserCloudFullResHandler);
-
-	pubLaserCloudSurround = nh.advertise<sensor_msgs::PointCloud2>("/laser_cloud_surround", 100);
-
-	pubLaserCloudMap = nh.advertise<sensor_msgs::PointCloud2>("/laser_cloud_map", 100);
-
-	pubLaserCloudFullRes = nh.advertise<sensor_msgs::PointCloud2>("/velodyne_cloud_registered", 100);
-
-	pubOdomAftMapped = nh.advertise<nav_msgs::Odometry>("/aft_mapped_to_init", 100);
-
-	pubOdomAftMappedHighFrec = nh.advertise<nav_msgs::Odometry>("/aft_mapped_to_init_high_frec", 100);
-
-	pubLaserAfterMappedPath = nh.advertise<nav_msgs::Path>("/aft_mapped_path", 100);
+    //; 发布：经过scan-to-map优化之后的结果
+	pubLaserCloudSurround = nh.advertise<sensor_msgs::PointCloud2>("
+        /laser_cloud_surround", 100);
+	pubLaserCloudMap = nh.advertise<sensor_msgs::PointCloud2>(
+        "/laser_cloud_map", 100);
+	pubLaserCloudFullRes = nh.advertise<sensor_msgs::PointCloud2>(
+        "/velodyne_cloud_registered", 100);
+	pubOdomAftMapped = nh.advertise<nav_msgs::Odometry>(
+        "/aft_mapped_to_init", 100);
+	pubOdomAftMappedHighFrec = nh.advertise<nav_msgs::Odometry>(
+        "/aft_mapped_to_init_high_frec", 100);
+	pubLaserAfterMappedPath = nh.advertise<nav_msgs::Path>(
+        "/aft_mapped_path", 100);
 
 	for (int i = 0; i < laserCloudNum; i++)
 	{

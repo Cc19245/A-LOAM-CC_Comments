@@ -189,6 +189,21 @@ void laserCloudFullResHandler(const sensor_msgs::PointCloud2ConstPtr &laserCloud
     mBuf.unlock();
 }
 
+
+/**
+ * @brief main函数中使用while循环来进行逻辑处理，使用scan-to-scan计算里程计
+ *  注意：实际上后来的F-LOAM指出scan-to-scan是没有必要的，浪费时间且精度不高，所以后面直接改成了scan-to-map
+ *  1.把提取到的角点、面点都拿出来，转成pcl格式的数据
+ *  2.把当前帧的角点，在上一帧的特征点构造的kdtree中寻找最近的点，然后利用点到直线的距离构造残差
+ *    把当前帧的面点，在上一帧的特征点构造的kdtree中寻找最近的点，然后利用点到平面的距离构造残差
+ *    最后使用ceres进行优化，得到当前帧在odom坐标系下的坐标
+ *  3.把当前帧的odom、path发布，并把角点、面点等特征点适当降频后发布给后端，因为后端是scan-to-map
+ *    匹配，精度高但计算量大，因此不需要每一帧都进行scan-to-map
+ * 
+ * @param[in] argc 
+ * @param[in] argv 
+ * @return int 
+ */
 int main(int argc, char **argv)
 {
     ros::init(argc, argv, "laserOdometry");
@@ -198,26 +213,38 @@ int main(int argc, char **argv)
     nh.param<int>("mapping_skip_frame", skipFrameNum, 2);  
 
     printf("Mapping %d Hz \n", 10 / skipFrameNum);
-    // 订阅提取出来的点云
-    ros::Subscriber subCornerPointsSharp = nh.subscribe<sensor_msgs::PointCloud2>("/laser_cloud_sharp", 100, laserCloudSharpHandler);
 
-    ros::Subscriber subCornerPointsLessSharp = nh.subscribe<sensor_msgs::PointCloud2>("/laser_cloud_less_sharp", 100, laserCloudLessSharpHandler);
+    //; 订阅scanRegistration提取出来的特征点云
+    ros::Subscriber subCornerPointsSharp = nh.subscribe<sensor_msgs::PointCloud2>(
+        "/laser_cloud_sharp", 100, laserCloudSharpHandler);
 
-    ros::Subscriber subSurfPointsFlat = nh.subscribe<sensor_msgs::PointCloud2>("/laser_cloud_flat", 100, laserCloudFlatHandler);
+    ros::Subscriber subCornerPointsLessSharp = nh.subscribe<sensor_msgs::PointCloud2>(
+        "/laser_cloud_less_sharp", 100, laserCloudLessSharpHandler);
 
-    ros::Subscriber subSurfPointsLessFlat = nh.subscribe<sensor_msgs::PointCloud2>("/laser_cloud_less_flat", 100, laserCloudLessFlatHandler);
+    ros::Subscriber subSurfPointsFlat = nh.subscribe<sensor_msgs::PointCloud2>(
+        "/laser_cloud_flat", 100, laserCloudFlatHandler);
 
-    ros::Subscriber subLaserCloudFullRes = nh.subscribe<sensor_msgs::PointCloud2>("/velodyne_cloud_2", 100, laserCloudFullResHandler);
+    ros::Subscriber subSurfPointsLessFlat = nh.subscribe<sensor_msgs::PointCloud2>(
+        "/laser_cloud_less_flat", 100, laserCloudLessFlatHandler);
 
-    ros::Publisher pubLaserCloudCornerLast = nh.advertise<sensor_msgs::PointCloud2>("/laser_cloud_corner_last", 100);
+    ros::Subscriber subLaserCloudFullRes = nh.subscribe<sensor_msgs::PointCloud2>(
+        "/velodyne_cloud_2", 100, laserCloudFullResHandler);
 
-    ros::Publisher pubLaserCloudSurfLast = nh.advertise<sensor_msgs::PointCloud2>("/laser_cloud_surf_last", 100);
+    //; 发布点云和里程计、path信息
+    ros::Publisher pubLaserCloudCornerLast = nh.advertise<sensor_msgs::PointCloud2>(
+        "/laser_cloud_corner_last", 100);
 
-    ros::Publisher pubLaserCloudFullRes = nh.advertise<sensor_msgs::PointCloud2>("/velodyne_cloud_3", 100);
+    ros::Publisher pubLaserCloudSurfLast = nh.advertise<sensor_msgs::PointCloud2>(
+        "/laser_cloud_surf_last", 100);
 
-    ros::Publisher pubLaserOdometry = nh.advertise<nav_msgs::Odometry>("/laser_odom_to_init", 100);
+    ros::Publisher pubLaserCloudFullRes = nh.advertise<sensor_msgs::PointCloud2>(
+        "/velodyne_cloud_3", 100);
 
-    ros::Publisher pubLaserPath = nh.advertise<nav_msgs::Path>("/laser_odom_path", 100);
+    ros::Publisher pubLaserOdometry = nh.advertise<nav_msgs::Odometry>(
+        "/laser_odom_to_init", 100);
+
+    ros::Publisher pubLaserPath = nh.advertise<nav_msgs::Path>(
+        "/laser_odom_path", 100);
 
     nav_msgs::Path laserPath;
 
