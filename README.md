@@ -1,4 +1,28 @@
+# A-LOAM-CC_Comments
+
+## Introduction
+
+本仓库是 [A-LOAM](https://github.com/HKUST-Aerial-Robotics/A-LOAM) 的详细中文注释，，如果你想快速了解 A-LOAM 的工程代码架构，可以参考我的博客：[A-LOAM编译与框架分析](https://blog.csdn.net/qq_42731705/article/details/123331805)
+
+## Done
+
+- 仔细注释一遍所有代码
+
+## TODO
+
+- [ ] 重新读一遍代码，进行二次注释
+
+## Acknowledgements
+
+- [a-loam-noted](https://github.com/xieqi1/a-loam-noted)
+- [A-LOAM](https://github.com/HKUST-Aerial-Robotics/A-LOAM)
+
+
+
+---
+
 # A-LOAM
+
 ## Advanced implementation of LOAM
 
 A-LOAM is an Advanced implementation of LOAM (J. Zhang and S. Singh. LOAM: Lidar Odometry and Mapping in Real-time), which uses Eigen and Ceres Solver to simplify code structure. This code is modified from LOAM and [LOAM_NOTED](https://github.com/cuitaixiang/LOAM_NOTED). This code is clean and simple without complicated mathematical derivation and redundant operations. It is a good learning material for SLAM beginners.

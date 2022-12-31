@@ -1018,8 +1018,8 @@ int main(int argc, char **argv)
         "/velodyne_cloud_3", 100, laserCloudFullResHandler);
 
     //; 发布：经过scan-to-map优化之后的结果
-	pubLaserCloudSurround = nh.advertise<sensor_msgs::PointCloud2>("
-        /laser_cloud_surround", 100);
+	pubLaserCloudSurround = nh.advertise<sensor_msgs::PointCloud2>(
+        "/laser_cloud_surround", 100);
 	pubLaserCloudMap = nh.advertise<sensor_msgs::PointCloud2>(
         "/laser_cloud_map", 100);
 	pubLaserCloudFullRes = nh.advertise<sensor_msgs::PointCloud2>(
